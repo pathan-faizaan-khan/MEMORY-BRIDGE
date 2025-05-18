@@ -1,0 +1,172 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Face Recognition Stream</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f0f0f0;
+            text-align: center;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 { margin-bottom: 20px; }
+        #videoDisplay {
+            width: 100%;
+            max-width: 640px;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #000;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        #fps, #frameInfo, #faceInfo { font-size: 14px; margin-top: 10px; }
+    </style>
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Face Recognition Stream</h1>
+        <img id="videoDisplay" src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" alt="Waiting for video...">
+        <div id="status" class="status disconnected">Waiting for connection...</div>
+        <div id="fps">FPS: 0</div>
+        <div id="frameInfo">Waiting for frames...</div>
+        <div id="faceInfo"></div>
+    </div>
+
+    <script>
+        const videoDisplay = document.getElementById('videoDisplay');
+        const statusElement = document.getElementById('status');
+        const fpsElement = document.getElementById('fps');
+        const frameInfoElement = document.getElementById('frameInfo');
+        const faceInfoElement = document.getElementById('faceInfo');
+        
+        // Track frames for FPS calculation
+        let frameCount = 0;
+        let lastFrameTime = Date.now();
+        let framesReceived = 0;
+        
+        // Connect to Socket.IO server
+        const socket = io({
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            reconnectionAttempts: Infinity
+        });
+        
+        // Handle connection events
+        socket.on('connect', () => {
+            console.log('Connected to server with ID:', socket.id);
+            statusElement.textContent = 'Connected. Waiting for video...';
+            statusElement.className = 'status connected';
+            
+            // Register as viewer
+            socket.emit('register_viewer');
+        });
+        
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+            statusElement.textContent = 'Disconnected from server';
+            statusElement.className = 'status disconnected';
+        });
+        
+        // Debug connection issues
+        socket.on('connect_error', (err) => {
+            console.error('Connection error:', err);
+            statusElement.textContent = 'Connection error: ' + err.message;
+            statusElement.className = 'status disconnected';
+        });
+        
+        // Handle incoming frames
+        socket.on('frame', (data) => {
+            if (!data.frame) {
+                console.error('Received empty frame data');
+                return;
+            }
+            
+            // Update frame counter
+            framesReceived++;
+            frameCount++;
+            const now = Date.now();
+            
+            // Calculate FPS every second
+            if (now - lastFrameTime >= 1000) {
+                const fps = Math.round(frameCount * 1000 / (now - lastFrameTime));
+                fpsElement.textContent = `FPS: ${fps}`;
+                frameCount = 0;
+                lastFrameTime = now;
+            }
+            
+            // Update image
+            videoDisplay.src = 'data:image/jpeg;base64,' + data.frame;
+            
+            // Update info
+            frameInfoElement.textContent = `Frames received: ${framesReceived}`;
+            statusElement.textContent = 'Connected - Receiving Video Stream';
+            statusElement.className = 'status connected';
+        });
+        
+        socket.on('face_detected', (data) => {
+            faceInfoElement.textContent = `Face detected: ${data.name || 'Unknown'}`;
+        });
+        
+        // Face enrollment system
+        const startFaceEnrollment = () => {
+            socket.emit('start_face_enrollment', {}, (response) => {
+                if (response.status === 'success') {
+                    showMessage('Please position your face in the camera');
+                }
+            });
+        };
+
+        // Listen for enrollment progress
+        socket.on('enrollment_progress', (data) => {
+            showMessage(`Collecting faces: ${data.faces_collected}/${data.faces_needed}`);
+            updateProgressBar(data.progress);
+        });
+
+        // When enrollment is ready
+        socket.on('enrollment_ready', () => {
+            showMessage('All faces collected! Please enter your name:');
+            showNamePrompt((name) => {
+                socket.emit('save_enrolled_face', {
+                    name: name,
+                    relationship: 'Friend',  // Optional
+                    description: 'Added via web interface'  // Optional
+                });
+            });
+        });
+
+        // When enrollment is complete
+        socket.on('enrollment_complete', (data) => {
+            showMessage(`Enrollment complete for ${data.name}!`);
+        });
+
+        // Listen for recognition results
+        socket.on('recognition_results', (data) => {
+            // Update UI with recognized faces
+            updateRecognitionDisplay(data.results);
+        });
+
+        // When a person is recognized
+        socket.on('person_recognized', (data) => {
+            showNotification(`Recognized: ${data.person.name}`);
+        });
+    </script>
+</body>
+</html>
+    
